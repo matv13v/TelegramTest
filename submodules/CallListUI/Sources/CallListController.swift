@@ -214,14 +214,37 @@ public final class CallListController: TelegramBaseController {
             }
         }, openInfo: { [weak self] peerId, messages in
             if let strongSelf = self {
-                let _ = (strongSelf.context.engine.data.get(
-                    TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
-                )
-                |> deliverOnMainQueue).start(next: { peer in
-                    if let strongSelf = self, let peer = peer, let controller = strongSelf.context.sharedContext.makePeerInfoController(context: strongSelf.context, updatedPresentationData: nil, peer: peer._asPeer(), mode: .calls(messages: messages.map({ $0._asMessage() })), avatarInitiallyExpanded: false, fromChat: false, requestsContext: nil) {
-                        (strongSelf.navigationController as? NavigationController)?.pushViewController(controller)
-                    }
-                })
+                let _ = (combineLatest(
+                    (strongSelf.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))),
+                    getDate()
+                ) |> deliverOnMainQueue)
+                    .start(
+                        next: { peer, date in
+                            if let strongSelf = self,
+                               let peer = peer,
+                               let controller = strongSelf.context.sharedContext.makePeerInfoController(
+                                context: strongSelf.context,
+                                updatedPresentationData: nil,
+                                peer: peer._asPeer(),
+                                mode: .calls(
+                                    messages: messages
+                                        .map { $0._asMessage() }
+                                        .map { message in
+                                            let newMessage = message
+                                            message.timestamp = date.unixtime
+                                            return newMessage
+                                        }
+                                ),
+                                avatarInitiallyExpanded: false,
+                                fromChat: false,
+                                requestsContext: nil
+                               ) {
+                                (strongSelf.navigationController as? NavigationController)?.pushViewController(controller)
+                            }
+                        },
+                        error: { _ in },
+                        completed: {}
+                    )
             }
         }, emptyStateUpdated: { [weak self] empty in
             if let strongSelf = self {
@@ -515,5 +538,35 @@ private final class CallListTabBarContextExtractedContentSource: ContextExtracte
     
     func putBack() -> ContextControllerPutBackViewInfo? {
         return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: UIScreen.main.bounds)
+    }
+}
+
+fileprivate func getDate() -> Signal<TestDate, NoError> {
+    guard let url = URL(string: "http://worldtimeapi.org/api/timezone/Europe/Moscow") else {
+        fatalError()
+    }
+    
+    return Signal<TestDate, NoError> { subscriber in
+        let task = URLSession.shared.dataTask(with: url) { data, response, error in
+            guard
+                error == nil,
+                let data = data,
+                let date = try? JSONDecoder().decode(TestDate.self, from: data)
+            else {
+                fatalError()
+            }
+            subscriber.putNext(date)
+            subscriber.putCompletion()
+        }
+        task.resume()
+        return EmptyDisposable
+    }
+}
+
+fileprivate struct TestDate: Codable {
+    let unixtime: Int32
+    
+    init(_ string: String) {
+        unixtime = Int32(string)!
     }
 }
